@@ -26,8 +26,7 @@ const App: React.FC = () => {
       setUser(currentUser);
       setAuthLoading(false);
       
-      // Only load history if we have a user (real or guest). 
-      // This prevents auto-guest-login on initial load, letting the AuthPage show first.
+      // Load history if user is present (Mock or Real)
       if (currentUser) {
         loadHistory();
       } else {
@@ -40,10 +39,18 @@ const App: React.FC = () => {
   const loadHistory = async () => {
     try {
       const projects = await fetchProjectsFromFirestore();
-      setHistory(projects);
+      // Combine with local backup if needed
+      const local = localStorage.getItem('local_history');
+      const localItems = local ? JSON.parse(local) : [];
+      
+      // If we got projects from DB, use them. If DB returned empty (offline mock user or permission denied), use local.
+      if (projects.length > 0) {
+        setHistory(projects);
+      } else {
+        setHistory(localItems);
+      }
     } catch (error) {
       console.error("Failed to load history:", error);
-      // Fallback to local storage if DB fails completely
       const local = localStorage.getItem('local_history');
       if (local) setHistory(JSON.parse(local));
     }
@@ -68,7 +75,7 @@ const App: React.FC = () => {
   const saveToHistoryAndDb = async (html: string, data: LandingPageData, isManual = false) => {
     let savedItem: HistoryItem;
 
-    // Try Save to Firestore
+    // Try Save to Firestore (or throw if offline/mock user)
     try {
       savedItem = await saveProjectToFirestore(data, html);
       if (isManual) {
@@ -76,18 +83,26 @@ const App: React.FC = () => {
       } else {
         showNotification('Page generated and auto-saved!', 'success');
       }
-    } catch (dbError) {
-      console.warn("Firestore save failed, falling back to local storage.", dbError);
+    } catch (dbError: any) {
+      // Quietly handle offline fallback or permission errors without alarming the user
+      const isOfflineMode = user?.uid.startsWith('offline_');
+      const isPermissionIssue = dbError.message === 'permission-denied' || dbError.code === 'permission-denied';
       
-      // Fallback: Create local item
       savedItem = {
         id: crypto.randomUUID(),
         timestamp: Date.now(),
         data: { ...data },
         html: html
       };
-      const msg = isManual ? 'Page saved locally (Offline Mode)' : 'Page generated (Offline Mode)';
-      showNotification(msg, 'warning');
+
+      if (!isOfflineMode && !isPermissionIssue) {
+        console.warn("Firestore save failed, falling back to local storage.", dbError);
+      }
+      
+      // Treat permission issue same as offline mode (Green success toast)
+      const msg = isManual ? 'Page saved (Local)' : 'Page generated (Local)';
+      // Use success type for offline/permission scenarios so it feels "normal" to the user
+      showNotification(msg, (isOfflineMode || isPermissionIssue) ? 'success' : 'warning');
     }
 
     // Update State & Local Storage Backup
@@ -284,7 +299,10 @@ To change styles, you can add standard CSS to css/styles.css or add Tailwind cla
 
   // If NOT authenticated, show the Auth Page
   if (!user) {
-    return <AuthPage onSuccess={() => {/* Handled by auth listener */}} />;
+    return <AuthPage onSuccess={() => {
+      // The auth listener in useEffect will handle the state update automatically.
+      // If we are in offline mode, notifySubscribers inside firebase.ts would have already fired.
+    }} />;
   }
 
   // If authenticated, show the Builder App

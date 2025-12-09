@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LayoutTemplate, Loader2, Mail, Lock, User as UserIcon, AlertCircle } from 'lucide-react';
+import { LayoutTemplate, Mail, Lock, User as UserIcon, AlertCircle } from 'lucide-react';
 import { Button } from './ui/Button';
 import { loginWithEmail, registerWithEmail, loginWithGoogle, loginAnonymously } from '../services/firebase';
 
@@ -29,14 +29,22 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
         if (!name.trim()) throw new Error("Name is required.");
         await registerWithEmail(name, email, password);
       }
-      // Auth listener in App.tsx will handle the redirect, but calling onSuccess is a good backup
       onSuccess();
     } catch (err: any) {
-      // Firebase error codes map to readable messages
+      // Improve user-facing error messages
       let msg = err.message;
-      if (err.code === 'auth/invalid-credential') msg = "Invalid email or password.";
-      if (err.code === 'auth/email-already-in-use') msg = "Email is already in use.";
-      if (err.code === 'auth/weak-password') msg = "Password should be at least 6 characters.";
+      
+      // Handle standard Firebase Auth errors
+      if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
+        msg = "Incorrect email or password. If you don't have an account, please Sign Up.";
+      } else if (err.code === 'auth/email-already-in-use') {
+        msg = "Email is already in use. Please Sign In instead.";
+      } else if (err.code === 'auth/weak-password') {
+        msg = "Password should be at least 6 characters.";
+      } else if (err.code === 'auth/invalid-email') {
+        msg = "Please enter a valid email address.";
+      }
+      
       setError(msg);
     } finally {
       setIsLoading(false);
@@ -50,7 +58,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
       await loginWithGoogle();
       onSuccess();
     } catch (err: any) {
-      setError("Google sign in failed. Please try again.");
+      // If service handles fallback, we shouldn't get here for config errors
+      setError("Google sign in failed.");
     } finally {
       setIsLoading(false);
     }
@@ -63,7 +72,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
       await loginAnonymously();
       onSuccess();
     } catch (err: any) {
-      setError("Guest login failed. Please try again.");
+      setError("Guest login failed.");
     } finally {
       setIsLoading(false);
     }
@@ -223,4 +232,4 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
       </div>
     </div>
   );
-};
+}

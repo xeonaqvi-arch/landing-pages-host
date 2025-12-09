@@ -28,7 +28,7 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 
-// Handle Analytics initialization safely (might fail in some environments)
+// Handle Analytics initialization safely
 let analytics;
 try {
   analytics = getAnalytics(app);
@@ -40,50 +40,57 @@ const db = getFirestore(app);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 
-// --- Auth Functions ---
+// --- Auth State Management with Offline Fallback ---
 
-export const loginWithGoogle = async () => {
-  try {
-    const result = await signInWithPopup(auth, googleProvider);
-    return result.user;
-  } catch (error) {
-    console.error("Google Sign-In Error:", error);
-    throw error;
-  }
+// We need to track the user manually to support "Mock Users" when Firebase Auth is unconfigured
+let currentMockUser: User | null = null;
+const authSubscribers: Array<(user: User | null) => void> = [];
+
+const notifySubscribers = (user: User | null) => {
+  authSubscribers.forEach(cb => cb(user));
 };
 
-export const registerWithEmail = async (name: string, email: string, password: string) => {
-  try {
-    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-    // Update the user's display name
-    await updateProfile(userCredential.user, {
-      displayName: name
-    });
-    return userCredential.user;
-  } catch (error) {
-    console.error("Registration Error:", error);
-    throw error;
-  }
-};
+// Helper to create a fake user object that satisfies the Firebase User interface
+const createMockUser = (email: string, displayName: string, isAnonymous: boolean): User => ({
+  uid: 'offline_' + Date.now(),
+  email,
+  displayName,
+  emailVerified: false,
+  isAnonymous,
+  metadata: {},
+  providerData: [],
+  refreshToken: '',
+  tenantId: null,
+  delete: async () => {},
+  getIdToken: async () => 'mock-token',
+  getIdTokenResult: async () => ({} as any),
+  reload: async () => {},
+  toJSON: () => ({}),
+  phoneNumber: null,
+  photoURL: null,
+  providerId: 'firebase',
+} as unknown as User);
 
-export const loginWithEmail = async (email: string, password: string) => {
-  try {
-    const userCredential = await signInWithEmailAndPassword(auth, email, password);
-    return userCredential.user;
-  } catch (error) {
-    console.error("Login Error:", error);
-    throw error;
-  }
-};
+export const subscribeToAuth = (callback: (user: User | null) => void) => {
+  // Add to our local subscribers list
+  authSubscribers.push(callback);
+  
+  // Trigger immediately with current state
+  callback(currentMockUser || auth.currentUser);
 
-export const loginAnonymously = async () => {
-  try {
-    const result = await signInAnonymously(auth);
-    return result.user;
-  } catch (error) {
-    console.error("Anonymous Auth Error:", error);
-    throw error;
-  }
+  // Subscribe to real Firebase Auth changes
+  const unsubscribeFirebase = onAuthStateChanged(auth, (user) => {
+    // Only update if we aren't using a mock user override
+    if (!currentMockUser) {
+      callback(user);
+    }
+  });
+
+  return () => {
+    const index = authSubscribers.indexOf(callback);
+    if (index > -1) authSubscribers.splice(index, 1);
+    unsubscribeFirebase();
+  };
 };
 
 export const logoutUser = async () => {
@@ -92,63 +99,136 @@ export const logoutUser = async () => {
   } catch (error) {
     console.error("Logout Error:", error);
   }
+  // Clear mock user if exists
+  if (currentMockUser) {
+    currentMockUser = null;
+    notifySubscribers(null);
+  }
 };
 
-export const subscribeToAuth = (callback: (user: User | null) => void) => {
-  return onAuthStateChanged(auth, callback);
+// --- Auth Functions with Fallback ---
+
+export const loginWithGoogle = async () => {
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    currentMockUser = null; // Clear mock if real login succeeds
+    return result.user;
+  } catch (error: any) {
+    console.error("Google Sign-In Error:", error);
+    if (error.code === 'auth/configuration-not-found' || error.code === 'auth/operation-not-allowed') {
+       console.warn("Google Auth disabled. Falling back to offline mode.");
+       const mock = createMockUser('google@offline.local', 'Google User (Offline)', false);
+       currentMockUser = mock;
+       notifySubscribers(mock);
+       return mock;
+    }
+    throw error;
+  }
 };
 
-// Helper to ensure user is authenticated before DB operations
-// Returns User if successful, null if auth fails (enabling offline fallback)
-const ensureAuth = async (): Promise<User | null> => {
-  return new Promise((resolve) => {
-    // Check if we already have a user
-    if (auth.currentUser) {
-      resolve(auth.currentUser);
-      return;
+export const registerWithEmail = async (name: string, email: string, password: string) => {
+  try {
+    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    await updateProfile(userCredential.user, { displayName: name });
+    currentMockUser = null;
+    return userCredential.user;
+  } catch (error: any) {
+    if (error.code === 'auth/configuration-not-found' || error.code === 'auth/operation-not-allowed') {
+      console.warn("Email Auth disabled. Falling back to offline mode.");
+      const mock = createMockUser(email, name, false);
+      currentMockUser = mock;
+      notifySubscribers(mock);
+      return mock;
+    }
+    console.error("Registration Error:", error);
+    throw error;
+  }
+};
+
+export const loginWithEmail = async (email: string, password: string) => {
+  try {
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    currentMockUser = null;
+    return userCredential.user;
+  } catch (error: any) {
+    // Check for config errors that require offline fallback
+    if (error.code === 'auth/configuration-not-found' || error.code === 'auth/operation-not-allowed') {
+      console.warn("Email Auth disabled. Falling back to offline mode.");
+      // Try to construct a name from email
+      const name = email.split('@')[0];
+      const mock = createMockUser(email, name, false);
+      currentMockUser = mock;
+      notifySubscribers(mock);
+      return mock;
     }
 
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      unsubscribe();
-      if (user) {
-        resolve(user);
-      } else {
-        // If we reach here in ensureAuth, it implies a DB operation was requested 
-        // without an active user. We will try anonymous login as a fallback 
-        // to ensure the DB operation can proceed if the rules allow it.
-        signInAnonymously(auth)
-          .then((cred) => resolve(cred.user))
-          .catch((error) => {
-            if (error.code === 'auth/configuration-not-found' || error.code === 'auth/operation-not-allowed') {
-                console.warn("⚠️ Firebase Auth Warning: Anonymous sign-in is disabled in the Firebase Console.");
-                console.warn("Falling back to local storage (Offline Mode).");
-            } else {
-                console.error("Firebase Auth Error:", error);
-            }
-            resolve(null);
-          });
-      }
-    });
-  });
+    // Only log unexpected system errors. 
+    // We suppress 'invalid-credential' (user error) to keep console clean.
+    if (error.code !== 'auth/invalid-credential' && error.code !== 'auth/user-not-found' && error.code !== 'auth/wrong-password') {
+        console.error("Login Error:", error);
+    }
+    throw error;
+  }
+};
+
+export const loginAnonymously = async () => {
+  try {
+    const result = await signInAnonymously(auth);
+    currentMockUser = null;
+    return result.user;
+  } catch (error: any) {
+    if (error.code === 'auth/configuration-not-found' || error.code === 'auth/operation-not-allowed') {
+      console.warn("Anonymous Auth disabled. Falling back to offline mode.");
+      const mock = createMockUser('guest@offline.local', 'Guest (Offline)', true);
+      currentMockUser = mock;
+      notifySubscribers(mock);
+      return mock;
+    }
+    console.error("Anonymous Auth Error:", error);
+    throw error;
+  }
 };
 
 // --- Firestore Functions ---
 
+// Helper to ensure we have a user (Real or Mock)
+const getCurrentUser = (): User | null => {
+  return currentMockUser || auth.currentUser;
+};
+
 export const saveProjectToFirestore = async (data: LandingPageData, html: string): Promise<HistoryItem> => {
-  const user = await ensureAuth();
+  const user = getCurrentUser();
   
-  // If auth failed, throw error to trigger local storage fallback in App.tsx
-  if (!user) {
-    throw new Error("Firebase Auth unavailable - utilizing local storage fallback");
+  // If we are offline/mock user, throw error to force local storage fallback
+  if (!user || user.uid.startsWith('offline_')) {
+    throw new Error("Offline mode - utilizing local storage fallback");
   }
 
   try {
-    const docRef = await addDoc(collection(db, "landingpages"), {
-      userId: user.uid, // Associate data with the user
-      data,
-      html,
-      createdAt: serverTimestamp()
-    });
+    // Generate page_id (slug) from page name
+    const slug = data.pageName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)+/g, '') || 'landing-page';
+    
+    // Append random string to ensure uniqueness
+    const pageId = `${slug}-${Math.random().toString(36).substring(2, 7)}`;
+
+    // Prepare payload matching user requirements exactly
+    // Collection: "landing_pages"
+    const payload = {
+      created_at: serverTimestamp(),
+      html_content: html,
+      "live-url": "",
+      page_id: pageId,
+      status: "pending",
+      
+      // Metadata (kept for internal app logic, but distinct from user requirements)
+      userId: user.uid,
+      data: data
+    };
+
+    const docRef = await addDoc(collection(db, "landing_pages"), payload);
 
     return {
       id: docRef.id,
@@ -157,25 +237,26 @@ export const saveProjectToFirestore = async (data: LandingPageData, html: string
       html
     };
   } catch (error: any) {
+    // Check for permission denied and throw a specific error message for App.tsx to handle
     if (error.code === 'permission-denied') {
-      console.error("Firestore Permission Denied: Check your Firestore Security Rules.");
+      console.warn("Firestore Permission Denied - switching to local storage fallback.");
+      throw new Error("permission-denied");
     }
+    console.error("Firestore Save Error:", error);
     throw error;
   }
 };
 
 export const fetchProjectsFromFirestore = async (): Promise<HistoryItem[]> => {
-  const user = await ensureAuth();
+  const user = getCurrentUser();
   
-  // If auth failed, return empty array to trigger local storage load in App.tsx
-  if (!user) {
-    console.warn("Skipping Firestore fetch due to auth failure");
-    return [];
+  if (!user || user.uid.startsWith('offline_')) {
+    return []; // Return empty for mock users, let App.tsx load from local storage
   }
 
   try {
     const q = query(
-      collection(db, "landingpages"), 
+      collection(db, "landing_pages"), 
       where("userId", "==", user.uid)
     );
     
@@ -183,19 +264,30 @@ export const fetchProjectsFromFirestore = async (): Promise<HistoryItem[]> => {
     
     const items = querySnapshot.docs.map(doc => {
       const d = doc.data();
+      
+      // Handle timestamp mapping (support new 'created_at' and old 'createdAt')
+      const timestamp = d.created_at?.toMillis 
+        ? d.created_at.toMillis() 
+        : (d.createdAt?.toMillis ? d.createdAt.toMillis() : Date.now());
+      
+      // Handle html content mapping (support new 'html_content' and old 'html')
+      const html = d.html_content || d.html || "";
+
       return {
         id: doc.id,
-        timestamp: d.createdAt?.toMillis ? d.createdAt.toMillis() : Date.now(),
+        timestamp: timestamp,
         data: d.data as LandingPageData,
-        html: d.html as string
+        html: html,
+        userId: d.userId
       };
     });
 
     return items.sort((a, b) => b.timestamp - a.timestamp);
 
   } catch (error: any) {
+    // If permissions are denied, return empty array so app falls back to local storage
     if (error.code === 'permission-denied' || error.code === 'unavailable') {
-      console.warn("Firestore unavailable/denied. Using local history.");
+      console.warn("Firestore access denied/unavailable. Falling back to local storage.");
       return [];
     }
     console.error("Error fetching from Firestore:", error);

@@ -103,8 +103,8 @@ const App: React.FC = () => {
     try {
       savedItem = await saveProjectToFirestore(data, html);
       
-      // Construct Live URL locally so we can show it immediately
-      const liveUrl = `${window.location.origin}/?uid=${savedItem.userId}&page=${savedItem.id}`;
+      // Construct Live URL locally with the correct domain
+      const liveUrl = `https://landing-pages-host.vercel.app/?uid=${savedItem.userId}&page=${savedItem.id}`;
       setCurrentLiveUrl(liveUrl);
 
       const msg = isManual ? 'Page saved to Database!' : 'Page generated & saved!';
@@ -164,7 +164,7 @@ const App: React.FC = () => {
     
     // Reconstruct URL if we have user info
     if (user && item.id.endsWith('.html')) {
-       const liveUrl = `${window.location.origin}/?uid=${user.uid}&page=${item.id}`;
+       const liveUrl = `https://landing-pages-host.vercel.app/?uid=${user.uid}&page=${item.id}`;
        setCurrentLiveUrl(liveUrl);
     } else {
        setCurrentLiveUrl('');

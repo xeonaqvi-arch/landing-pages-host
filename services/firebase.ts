@@ -207,9 +207,8 @@ export const saveProjectToFirestore = async (data: LandingPageData, html: string
     // Create a "file-like" document ID: e.g., my-page-timestamp.html
     const fileId = `${slug}-${Date.now()}.html`;
 
-    // Construct the live URL relative to current origin + query params
-    // Format: https://myapp.vercel.app/?uid=USER_ID&page=FILE_ID
-    const liveUrl = `${window.location.origin}/?uid=${user.uid}&page=${fileId}`;
+    // Construct the live URL relative to the custom Vercel domain
+    const liveUrl = `https://landing-pages-host.vercel.app/?uid=${user.uid}&page=${fileId}`;
 
     // Prepare payload
     const payload = {

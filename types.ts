@@ -15,6 +15,7 @@ export interface HistoryItem {
   timestamp: number;
   data: LandingPageData;
   html: string;
+  userId?: string;
 }
 
 export interface GeneratedContent {

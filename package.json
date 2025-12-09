@@ -13,7 +13,8 @@
     "react-dom": "^19.2.1",
     "react": "^19.2.1",
     "@google/genai": "^1.32.0",
-    "jszip": "latest"
+    "jszip": "latest",
+    "firebase": "^12.6.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

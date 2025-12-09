@@ -1,22 +1,99 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { PreviewToolbar } from './components/PreviewToolbar';
 import { PreviewWindow } from './components/PreviewWindow';
+import { AuthPage } from './components/AuthPage';
 import { LandingPageData, INITIAL_FORM_STATE, DeviceType, HistoryItem } from './types';
 import { generateLandingPage } from './services/geminiService';
-import { CheckCircle2, AlertCircle } from 'lucide-react';
+import { saveProjectToFirestore, fetchProjectsFromFirestore, subscribeToAuth, logoutUser } from './services/firebase';
+import { CheckCircle2, AlertCircle, WifiOff, Loader2 } from 'lucide-react';
 import JSZip from 'jszip';
+import { User } from 'firebase/auth';
 
 const App: React.FC = () => {
   const [formData, setFormData] = useState<LandingPageData>(INITIAL_FORM_STATE);
   const [device, setDevice] = useState<DeviceType>('desktop');
   const [generatedHtml, setGeneratedHtml] = useState<string>('');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [notification, setNotification] = useState<{message: string, type: 'success' | 'error'} | null>(null);
+  const [notification, setNotification] = useState<{message: string, type: 'success' | 'error' | 'warning'} | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  // Subscribe to auth state and load history
+  useEffect(() => {
+    const unsubscribe = subscribeToAuth((currentUser) => {
+      setUser(currentUser);
+      setAuthLoading(false);
+      
+      // Only load history if we have a user (real or guest). 
+      // This prevents auto-guest-login on initial load, letting the AuthPage show first.
+      if (currentUser) {
+        loadHistory();
+      } else {
+        setHistory([]);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const loadHistory = async () => {
+    try {
+      const projects = await fetchProjectsFromFirestore();
+      setHistory(projects);
+    } catch (error) {
+      console.error("Failed to load history:", error);
+      // Fallback to local storage if DB fails completely
+      const local = localStorage.getItem('local_history');
+      if (local) setHistory(JSON.parse(local));
+    }
+  };
 
   const handleFormChange = (field: keyof LandingPageData, value: any) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+  };
+
+  const showNotification = (message: string, type: 'success' | 'error' | 'warning') => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 3000);
+  };
+
+  const handleLogout = async () => {
+    await logoutUser();
+    // History clearing handled by useEffect based on user state
+    showNotification('Signed out.', 'success');
+  };
+
+  // Centralized save function used by auto-save and manual save
+  const saveToHistoryAndDb = async (html: string, data: LandingPageData, isManual = false) => {
+    let savedItem: HistoryItem;
+
+    // Try Save to Firestore
+    try {
+      savedItem = await saveProjectToFirestore(data, html);
+      if (isManual) {
+        showNotification('Page saved successfully!', 'success');
+      } else {
+        showNotification('Page generated and auto-saved!', 'success');
+      }
+    } catch (dbError) {
+      console.warn("Firestore save failed, falling back to local storage.", dbError);
+      
+      // Fallback: Create local item
+      savedItem = {
+        id: crypto.randomUUID(),
+        timestamp: Date.now(),
+        data: { ...data },
+        html: html
+      };
+      const msg = isManual ? 'Page saved locally (Offline Mode)' : 'Page generated (Offline Mode)';
+      showNotification(msg, 'warning');
+    }
+
+    // Update State & Local Storage Backup
+    const newHistory = [savedItem, ...history];
+    setHistory(newHistory);
+    localStorage.setItem('local_history', JSON.stringify(newHistory.slice(0, 20))); // Keep last 20 locally
   };
 
   const handleGenerate = async () => {
@@ -27,16 +104,8 @@ const App: React.FC = () => {
       const html = await generateLandingPage(formData);
       setGeneratedHtml(html);
       
-      // Auto-save to history
-      const newHistoryItem: HistoryItem = {
-        id: crypto.randomUUID(),
-        timestamp: Date.now(),
-        data: { ...formData }, // Create a copy
-        html: html
-      };
-      
-      setHistory(prev => [newHistoryItem, ...prev]);
-      showNotification('Page generated and saved to history!', 'success');
+      // Auto-save the generated content to Firestore (or local fallback)
+      await saveToHistoryAndDb(html, formData, false);
 
     } catch (error) {
       console.error(error);
@@ -46,15 +115,18 @@ const App: React.FC = () => {
     }
   };
 
+  const handleManualSave = async () => {
+    if (!generatedHtml) {
+      showNotification('Nothing to save. Generate a page first!', 'error');
+      return;
+    }
+    await saveToHistoryAndDb(generatedHtml, formData, true);
+  };
+
   const handleLoadHistory = (item: HistoryItem) => {
     setFormData(item.data);
     setGeneratedHtml(item.html);
     showNotification('Previous version loaded.', 'success');
-  };
-
-  const showNotification = (message: string, type: 'success' | 'error') => {
-    setNotification({ message, type });
-    setTimeout(() => setNotification(null), 3000);
   };
 
   const handleSave = async () => {
@@ -98,14 +170,12 @@ const App: React.FC = () => {
       // 2. Extract JS
       let jsContent = '// Custom Scripts\n\n';
       const scriptTags = doc.querySelectorAll('script');
-      let hasExtractedJs = false;
       
       scriptTags.forEach((tag) => {
         // Skip external scripts (like Tailwind CDN) and import maps
         if (!tag.src && !tag.type?.includes('importmap') && !tag.type?.includes('module')) {
           jsContent += tag.innerHTML + '\n\n';
           tag.remove();
-          hasExtractedJs = true;
         }
       });
 
@@ -191,13 +261,42 @@ To change styles, you can add standard CSS to css/styles.css or add Tailwind cla
     }, 1500);
   };
 
+  const getNotificationStyles = (type: string) => {
+    switch(type) {
+      case 'success': return 'bg-white border-green-200 text-green-800';
+      case 'warning': return 'bg-white border-amber-200 text-amber-800';
+      case 'error': return 'bg-white border-red-200 text-red-800';
+      default: return 'bg-white border-gray-200 text-gray-800';
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // Render Logic
+  // --------------------------------------------------------------------------
+
+  if (authLoading) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-gray-50">
+        <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+      </div>
+    );
+  }
+
+  // If NOT authenticated, show the Auth Page
+  if (!user) {
+    return <AuthPage onSuccess={() => {/* Handled by auth listener */}} />;
+  }
+
+  // If authenticated, show the Builder App
   return (
     <div className="flex h-screen bg-white font-sans text-gray-900">
       
       {/* Toast Notification */}
       {notification && (
-        <div className={`fixed top-5 right-5 z-50 flex items-center gap-3 px-4 py-3 rounded-lg shadow-xl transform transition-all animate-in fade-in slide-in-from-top-5 duration-300 border ${notification.type === 'success' ? 'bg-white border-green-200 text-green-800' : 'bg-white border-red-200 text-red-800'}`}>
-          {notification.type === 'success' ? <CheckCircle2 className="w-5 h-5 text-green-600" /> : <AlertCircle className="w-5 h-5 text-red-600" />}
+        <div className={`fixed top-5 right-5 z-50 flex items-center gap-3 px-4 py-3 rounded-lg shadow-xl transform transition-all animate-in fade-in slide-in-from-top-5 duration-300 border ${getNotificationStyles(notification.type)}`}>
+          {notification.type === 'success' && <CheckCircle2 className="w-5 h-5 text-green-600" />}
+          {notification.type === 'warning' && <WifiOff className="w-5 h-5 text-amber-600" />}
+          {notification.type === 'error' && <AlertCircle className="w-5 h-5 text-red-600" />}
           <span className="text-sm font-medium">{notification.message}</span>
         </div>
       )}
@@ -207,9 +306,14 @@ To change styles, you can add standard CSS to css/styles.css or add Tailwind cla
         formData={formData} 
         onChange={handleFormChange} 
         onGenerate={handleGenerate}
+        onSave={handleManualSave}
         isGenerating={isGenerating}
+        hasContent={!!generatedHtml}
         history={history}
         onLoadHistory={handleLoadHistory}
+        user={user}
+        onLogin={() => {}} // User is already logged in if we are here
+        onLogout={handleLogout}
       />
 
       {/* Right Area - Preview */}

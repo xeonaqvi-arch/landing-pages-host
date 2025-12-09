@@ -2,24 +2,35 @@ import React, { useState } from 'react';
 import { Input, Select, TextArea } from './ui/Input';
 import { Button } from './ui/Button';
 import { LandingPageData, HistoryItem } from '../types';
-import { Wand2, LayoutTemplate, History, Edit3, ChevronRight, Clock } from 'lucide-react';
+import { Wand2, LayoutTemplate, History, Edit3, Clock, Save, LogIn, LogOut, User as UserIcon } from 'lucide-react';
+import { User } from 'firebase/auth';
 
 interface SidebarProps {
   formData: LandingPageData;
   onChange: (field: keyof LandingPageData, value: any) => void;
   onGenerate: () => void;
+  onSave: () => void;
   isGenerating: boolean;
+  hasContent: boolean;
   history: HistoryItem[];
   onLoadHistory: (item: HistoryItem) => void;
+  user: User | null;
+  onLogin: () => void;
+  onLogout: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ 
   formData, 
   onChange, 
   onGenerate, 
+  onSave,
   isGenerating,
+  hasContent,
   history,
-  onLoadHistory
+  onLoadHistory,
+  user,
+  onLogin,
+  onLogout
 }) => {
   const [activeTab, setActiveTab] = useState<'editor' | 'history'>('editor');
   
@@ -40,12 +51,59 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside className="w-[400px] flex-shrink-0 bg-white border-r border-gray-200 h-screen overflow-hidden flex flex-col shadow-sm z-20">
+      
+      {/* Header & Auth */}
       <div className="p-5 border-b border-gray-100 bg-white">
-        <div className="flex items-center gap-2 mb-4">
-          <div className="bg-indigo-600 p-1.5 rounded-lg shadow-sm">
-            <LayoutTemplate className="w-5 h-5 text-white" />
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <div className="bg-indigo-600 p-1.5 rounded-lg shadow-sm">
+              <LayoutTemplate className="w-5 h-5 text-white" />
+            </div>
+            <h1 className="text-xl font-bold text-gray-900 tracking-tight">PageBuilder AI</h1>
           </div>
-          <h1 className="text-xl font-bold text-gray-900 tracking-tight">PageBuilder AI</h1>
+        </div>
+        
+        {/* Auth Section */}
+        <div className="mb-4 bg-gray-50 rounded-lg p-3 border border-gray-100 flex items-center justify-between">
+            {user && !user.isAnonymous ? (
+              <div className="flex items-center gap-3 overflow-hidden">
+                {user.photoURL ? (
+                  <img src={user.photoURL} alt={user.displayName || "User"} className="w-8 h-8 rounded-full border border-gray-200" />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600">
+                    <UserIcon className="w-4 h-4" />
+                  </div>
+                )}
+                <div className="flex flex-col truncate">
+                  <span className="text-xs font-semibold text-gray-900 truncate">{user.displayName || 'User'}</span>
+                  <span className="text-[10px] text-gray-500 truncate">{user.email}</span>
+                </div>
+              </div>
+            ) : (
+               <div className="flex items-center gap-2 text-gray-500">
+                 <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center">
+                   <UserIcon className="w-4 h-4 text-gray-500" />
+                 </div>
+                 <div className="flex flex-col">
+                   <span className="text-xs font-semibold text-gray-700">Guest Mode</span>
+                   <span className="text-[10px] text-gray-400">Sign in to save projects</span>
+                 </div>
+               </div>
+            )}
+
+            {user && !user.isAnonymous ? (
+              <button onClick={onLogout} className="p-2 text-gray-400 hover:text-red-500 transition-colors" title="Sign Out">
+                <LogOut className="w-4 h-4" />
+              </button>
+            ) : (
+              <button 
+                onClick={onLogin} 
+                className="text-xs bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-3 py-1.5 rounded-md font-medium transition-all shadow-sm flex items-center gap-1.5"
+              >
+                <LogIn className="w-3 h-3" />
+                Sign In
+              </button>
+            )}
         </div>
 
         {/* Tabs */}
@@ -176,14 +234,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="bg-gray-50 w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3">
                   <History className="w-6 h-6 text-gray-400" />
                 </div>
-                <h3 className="text-gray-900 font-medium mb-1">No history yet</h3>
-                <p className="text-sm text-gray-500">Generate your first landing page to see it saved here.</p>
+                <h3 className="text-gray-900 font-medium mb-1">No history found</h3>
+                <p className="text-sm text-gray-500">
+                  {user && !user.isAnonymous 
+                    ? "You haven't generated any pages yet." 
+                    : "Sign in to save and access your history."}
+                </p>
                 <Button 
                   variant="ghost" 
                   className="mt-4 text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
                   onClick={() => setActiveTab('editor')}
                 >
-                  Go to Editor
+                  Create New Page
                 </Button>
               </div>
             ) : (
@@ -193,7 +255,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     key={item.id}
                     onClick={() => {
                       onLoadHistory(item);
-                      // Optional: switch back to editor or just show success toast
                     }}
                     className="w-full text-left bg-white p-3 rounded-lg border border-transparent hover:border-indigo-100 hover:shadow-md hover:bg-gray-50 transition-all group group-hover:border-indigo-200"
                   >
@@ -222,7 +283,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {activeTab === 'editor' && (
-        <div className="p-5 border-t border-gray-100 bg-gray-50/50">
+        <div className="p-5 border-t border-gray-100 bg-gray-50/50 space-y-3">
           <Button 
             onClick={onGenerate} 
             isLoading={isGenerating} 
@@ -230,6 +291,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
             icon={<Wand2 className="w-4 h-4" />}
           >
             {isGenerating ? 'Generating...' : 'Generate Page Content'}
+          </Button>
+          
+          <Button 
+            onClick={onSave}
+            variant="secondary"
+            disabled={!hasContent || isGenerating}
+            className="w-full"
+            icon={<Save className="w-4 h-4" />}
+          >
+            Save This Page
           </Button>
         </div>
       )}

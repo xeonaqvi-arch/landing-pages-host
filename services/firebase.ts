@@ -1,14 +1,11 @@
 import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
-import { getFirestore, collection, addDoc, getDocs, query, where, serverTimestamp } from "firebase/firestore";
+import { getFirestore, collection, addDoc, getDocs, query, where, serverTimestamp, doc, setDoc } from "firebase/firestore";
 import { 
   getAuth, 
-  signInAnonymously, 
-  signInWithPopup, 
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   updateProfile,
-  GoogleAuthProvider,
   signOut,
   onAuthStateChanged, 
   User 
@@ -38,7 +35,6 @@ try {
 
 const db = getFirestore(app);
 const auth = getAuth(app);
-const googleProvider = new GoogleAuthProvider();
 
 // --- Auth State Management with Offline Fallback ---
 
@@ -106,30 +102,45 @@ export const logoutUser = async () => {
   }
 };
 
-// --- Auth Functions with Fallback ---
-
-export const loginWithGoogle = async () => {
+// --- Firestore Helper for Users ---
+const saveUserToFirestore = async (user: User, provider: string, additionalData: any = {}) => {
+  if (!user || user.uid.startsWith('offline_')) return;
+  
   try {
-    const result = await signInWithPopup(auth, googleProvider);
-    currentMockUser = null; // Clear mock if real login succeeds
-    return result.user;
-  } catch (error: any) {
-    console.error("Google Sign-In Error:", error);
-    if (error.code === 'auth/configuration-not-found' || error.code === 'auth/operation-not-allowed') {
-       console.warn("Google Auth disabled. Falling back to offline mode.");
-       const mock = createMockUser('google@offline.local', 'Google User (Offline)', false);
-       currentMockUser = mock;
-       notifySubscribers(mock);
-       return mock;
-    }
-    throw error;
+    const userRef = doc(db, "users", user.uid);
+    const userData = {
+      uid: user.uid,
+      displayName: user.displayName || 'User',
+      email: user.email || '',
+      last_login: serverTimestamp(),
+      auth_provider: provider,
+      ...additionalData
+    };
+
+    await setDoc(userRef, userData, { merge: true });
+  } catch (e) {
+    console.warn("Failed to save user data to Firestore:", e);
   }
 };
+
+// --- Auth Functions with Fallback ---
 
 export const registerWithEmail = async (name: string, email: string, password: string) => {
   try {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    
+    // Update Auth Profile
     await updateProfile(userCredential.user, { displayName: name });
+    
+    // Save to Firestore under users/{uid}
+    // We explicitly pass 'name' and 'email' here to ensure they appear in the Firestore document
+    await saveUserToFirestore(userCredential.user, 'email', { 
+        created_at: serverTimestamp(),
+        name: name,
+        email: email,
+        displayName: name
+    });
+
     currentMockUser = null;
     return userCredential.user;
   } catch (error: any) {
@@ -148,13 +159,14 @@ export const registerWithEmail = async (name: string, email: string, password: s
 export const loginWithEmail = async (email: string, password: string) => {
   try {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    // Update last login
+    await saveUserToFirestore(userCredential.user, 'email');
     currentMockUser = null;
     return userCredential.user;
   } catch (error: any) {
     // Check for config errors that require offline fallback
     if (error.code === 'auth/configuration-not-found' || error.code === 'auth/operation-not-allowed') {
       console.warn("Email Auth disabled. Falling back to offline mode.");
-      // Try to construct a name from email
       const name = email.split('@')[0];
       const mock = createMockUser(email, name, false);
       currentMockUser = mock;
@@ -163,28 +175,9 @@ export const loginWithEmail = async (email: string, password: string) => {
     }
 
     // Only log unexpected system errors. 
-    // We suppress 'invalid-credential' (user error) to keep console clean.
     if (error.code !== 'auth/invalid-credential' && error.code !== 'auth/user-not-found' && error.code !== 'auth/wrong-password') {
         console.error("Login Error:", error);
     }
-    throw error;
-  }
-};
-
-export const loginAnonymously = async () => {
-  try {
-    const result = await signInAnonymously(auth);
-    currentMockUser = null;
-    return result.user;
-  } catch (error: any) {
-    if (error.code === 'auth/configuration-not-found' || error.code === 'auth/operation-not-allowed') {
-      console.warn("Anonymous Auth disabled. Falling back to offline mode.");
-      const mock = createMockUser('guest@offline.local', 'Guest (Offline)', true);
-      currentMockUser = mock;
-      notifySubscribers(mock);
-      return mock;
-    }
-    console.error("Anonymous Auth Error:", error);
     throw error;
   }
 };
@@ -217,13 +210,13 @@ export const saveProjectToFirestore = async (data: LandingPageData, html: string
     // Prepare payload matching user requirements exactly
     // Collection: "landing_pages"
     const payload = {
-      created_at: serverTimestamp(),
-      html_content: html,
-      "live-url": "",
-      page_id: pageId,
-      status: "pending",
+      created_at: serverTimestamp(), // Timestamp
+      html_content: html,            // String
+      "live-url": "",                // String
+      page_id: pageId,               // String
+      status: "pending",             // String
       
-      // Metadata (kept for internal app logic, but distinct from user requirements)
+      // Additional internal metadata
       userId: user.uid,
       data: data
     };

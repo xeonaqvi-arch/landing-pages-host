@@ -6,7 +6,7 @@ import { AuthPage } from './components/AuthPage';
 import { LandingPageData, INITIAL_FORM_STATE, DeviceType, HistoryItem } from './types';
 import { generateLandingPage } from './services/geminiService';
 import { saveProjectToFirestore, fetchProjectsFromFirestore, subscribeToAuth, logoutUser } from './services/firebase';
-import { CheckCircle2, AlertCircle, WifiOff, Loader2 } from 'lucide-react';
+import { CheckCircle2, AlertCircle, WifiOff, Loader2, Database } from 'lucide-react';
 import JSZip from 'jszip';
 import { User } from 'firebase/auth';
 
@@ -78,11 +78,9 @@ const App: React.FC = () => {
     // Try Save to Firestore (or throw if offline/mock user)
     try {
       savedItem = await saveProjectToFirestore(data, html);
-      if (isManual) {
-        showNotification('Page saved successfully!', 'success');
-      } else {
-        showNotification('Page generated and auto-saved!', 'success');
-      }
+      // Success!
+      const msg = isManual ? 'Page saved to Database!' : 'Page generated & saved to Database!';
+      showNotification(msg, 'success');
     } catch (dbError: any) {
       // Quietly handle offline fallback or permission errors without alarming the user
       const isOfflineMode = user?.uid.startsWith('offline_');
@@ -100,7 +98,7 @@ const App: React.FC = () => {
       }
       
       // Treat permission issue same as offline mode (Green success toast)
-      const msg = isManual ? 'Page saved (Local)' : 'Page generated (Local)';
+      const msg = isManual ? 'Page saved (Local Only)' : 'Page generated (Local Only)';
       // Use success type for offline/permission scenarios so it feels "normal" to the user
       showNotification(msg, (isOfflineMode || isPermissionIssue) ? 'success' : 'warning');
     }

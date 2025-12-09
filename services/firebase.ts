@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
-import { getFirestore, collection, addDoc, getDocs, query, where, serverTimestamp, doc, setDoc } from "firebase/firestore";
+import { getFirestore, collection, addDoc, getDocs, query, where, serverTimestamp, doc, setDoc, getDoc } from "firebase/firestore";
 import { 
   getAuth, 
   createUserWithEmailAndPassword,
@@ -204,19 +204,20 @@ export const saveProjectToFirestore = async (data: LandingPageData, html: string
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)+/g, '') || 'landing-page';
     
-    // Create a "file-like" document ID as requested: e.g., my-page-timestamp.html
+    // Create a "file-like" document ID: e.g., my-page-timestamp.html
     const fileId = `${slug}-${Date.now()}.html`;
 
-    // Prepare payload matching user requirements exactly
-    // Collection: "users/{uid}/landing_pages"
+    // Construct the live URL relative to current origin + query params
+    // Format: https://myapp.vercel.app/?uid=USER_ID&page=FILE_ID
+    const liveUrl = `${window.location.origin}/?uid=${user.uid}&page=${fileId}`;
+
+    // Prepare payload
     const payload = {
-      created_at: serverTimestamp(), // Timestamp
-      html_content: html,            // String
-      "live-url": "",                // String
-      page_id: fileId,               // String (using fileId as page_id for consistency)
-      status: "pending",             // String
-      
-      // Additional internal metadata
+      created_at: serverTimestamp(),
+      html_content: html,
+      "live-url": liveUrl,
+      page_id: fileId,
+      status: "published",
       userId: user.uid,
       data: data
     };
@@ -229,10 +230,10 @@ export const saveProjectToFirestore = async (data: LandingPageData, html: string
       id: fileId,
       timestamp: Date.now(),
       data,
-      html
+      html,
+      userId: user.uid
     };
   } catch (error: any) {
-    // Check for permission denied and throw a specific error message for App.tsx to handle
     if (error.code === 'permission-denied') {
       console.warn("Firestore Permission Denied - switching to local storage fallback.");
       throw new Error("permission-denied");
@@ -246,25 +247,17 @@ export const fetchProjectsFromFirestore = async (): Promise<HistoryItem[]> => {
   const user = getCurrentUser();
   
   if (!user || user.uid.startsWith('offline_')) {
-    return []; // Return empty for mock users, let App.tsx load from local storage
+    return []; 
   }
 
   try {
-    // Query subcollection: users/{uid}/landing_pages
     const pagesRef = collection(db, "users", user.uid, "landing_pages");
     const q = query(pagesRef);
-    
     const querySnapshot = await getDocs(q);
     
     const items = querySnapshot.docs.map(doc => {
       const d = doc.data();
-      
-      // Handle timestamp mapping
-      const timestamp = d.created_at?.toMillis 
-        ? d.created_at.toMillis() 
-        : (d.createdAt?.toMillis ? d.createdAt.toMillis() : Date.now());
-      
-      // Handle html content mapping
+      const timestamp = d.created_at?.toMillis ? d.created_at.toMillis() : Date.now();
       const html = d.html_content || d.html || "";
 
       return {
@@ -272,20 +265,36 @@ export const fetchProjectsFromFirestore = async (): Promise<HistoryItem[]> => {
         timestamp: timestamp,
         data: d.data as LandingPageData,
         html: html,
-        userId: user.uid // we know it belongs to this user
+        userId: user.uid
       };
     });
 
-    // Client-side sort by newest first
     return items.sort((a, b) => b.timestamp - a.timestamp);
 
   } catch (error: any) {
-    // If permissions are denied, return empty array so app falls back to local storage
     if (error.code === 'permission-denied' || error.code === 'unavailable') {
-      console.warn("Firestore access denied/unavailable. Falling back to local storage.");
       return [];
     }
     console.error("Error fetching from Firestore:", error);
     return [];
+  }
+};
+
+// --- Public Access Function ---
+export const fetchPublicPage = async (uid: string, pageId: string): Promise<string | null> => {
+  try {
+    const docRef = doc(db, "users", uid, "landing_pages", pageId);
+    const docSnap = await getDoc(docRef);
+
+    if (docSnap.exists()) {
+      const data = docSnap.data();
+      return data.html_content || data.html || null;
+    } else {
+      console.log("No such document!");
+      return null;
+    }
+  } catch (error) {
+    console.error("Error fetching public page:", error);
+    return null;
   }
 };

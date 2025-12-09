@@ -5,12 +5,18 @@ import { PreviewWindow } from './components/PreviewWindow';
 import { AuthPage } from './components/AuthPage';
 import { LandingPageData, INITIAL_FORM_STATE, DeviceType, HistoryItem } from './types';
 import { generateLandingPage } from './services/geminiService';
-import { saveProjectToFirestore, fetchProjectsFromFirestore, subscribeToAuth, logoutUser } from './services/firebase';
-import { CheckCircle2, AlertCircle, WifiOff, Loader2, Database } from 'lucide-react';
+import { saveProjectToFirestore, fetchProjectsFromFirestore, subscribeToAuth, logoutUser, fetchPublicPage } from './services/firebase';
+import { CheckCircle2, AlertCircle, WifiOff, Loader2 } from 'lucide-react';
 import JSZip from 'jszip';
 import { User } from 'firebase/auth';
 
 const App: React.FC = () => {
+  // Routing State
+  const [isPublicView, setIsPublicView] = useState(false);
+  const [publicHtml, setPublicHtml] = useState<string | null>(null);
+  const [publicLoading, setPublicLoading] = useState(false);
+
+  // App State
   const [formData, setFormData] = useState<LandingPageData>(INITIAL_FORM_STATE);
   const [device, setDevice] = useState<DeviceType>('desktop');
   const [generatedHtml, setGeneratedHtml] = useState<string>('');
@@ -19,9 +25,31 @@ const App: React.FC = () => {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [currentLiveUrl, setCurrentLiveUrl] = useState<string>('');
+
+  // Check for Public Viewer Route (query params)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const uid = params.get('uid');
+    const pageId = params.get('page');
+
+    if (uid && pageId) {
+      setIsPublicView(true);
+      setPublicLoading(true);
+      fetchPublicPage(uid, pageId).then((html) => {
+        setPublicHtml(html);
+        setPublicLoading(false);
+      });
+    }
+  }, []);
 
   // Subscribe to auth state and load history
   useEffect(() => {
+    if (isPublicView) {
+      setAuthLoading(false); // Skip auth check for public viewers
+      return;
+    }
+
     const unsubscribe = subscribeToAuth((currentUser) => {
       setUser(currentUser);
       setAuthLoading(false);
@@ -34,16 +62,14 @@ const App: React.FC = () => {
       }
     });
     return () => unsubscribe();
-  }, []);
+  }, [isPublicView]);
 
   const loadHistory = async () => {
     try {
       const projects = await fetchProjectsFromFirestore();
-      // Combine with local backup if needed
       const local = localStorage.getItem('local_history');
       const localItems = local ? JSON.parse(local) : [];
       
-      // If we got projects from DB, use them. If DB returned empty (offline mock user or permission denied), use local.
       if (projects.length > 0) {
         setHistory(projects);
       } else {
@@ -67,7 +93,6 @@ const App: React.FC = () => {
 
   const handleLogout = async () => {
     await logoutUser();
-    // History clearing handled by useEffect based on user state
     showNotification('Signed out.', 'success');
   };
 
@@ -75,14 +100,16 @@ const App: React.FC = () => {
   const saveToHistoryAndDb = async (html: string, data: LandingPageData, isManual = false) => {
     let savedItem: HistoryItem;
 
-    // Try Save to Firestore (or throw if offline/mock user)
     try {
       savedItem = await saveProjectToFirestore(data, html);
-      // Success!
-      const msg = isManual ? 'Page saved to Database!' : 'Page generated & saved to Database!';
+      
+      // Construct Live URL locally so we can show it immediately
+      const liveUrl = `${window.location.origin}/?uid=${savedItem.userId}&page=${savedItem.id}`;
+      setCurrentLiveUrl(liveUrl);
+
+      const msg = isManual ? 'Page saved to Database!' : 'Page generated & saved!';
       showNotification(msg, 'success');
     } catch (dbError: any) {
-      // Quietly handle offline fallback or permission errors without alarming the user
       const isOfflineMode = user?.uid.startsWith('offline_');
       const isPermissionIssue = dbError.message === 'permission-denied' || dbError.code === 'permission-denied';
       
@@ -93,31 +120,26 @@ const App: React.FC = () => {
         html: html
       };
 
-      if (!isOfflineMode && !isPermissionIssue) {
-        console.warn("Firestore save failed, falling back to local storage.", dbError);
-      }
-      
-      // Treat permission issue same as offline mode (Green success toast)
+      // In offline mode, we cannot have a live URL
+      setCurrentLiveUrl('');
+
       const msg = isManual ? 'Page saved (Local Only)' : 'Page generated (Local Only)';
-      // Use success type for offline/permission scenarios so it feels "normal" to the user
       showNotification(msg, (isOfflineMode || isPermissionIssue) ? 'success' : 'warning');
     }
 
-    // Update State & Local Storage Backup
     const newHistory = [savedItem, ...history];
     setHistory(newHistory);
-    localStorage.setItem('local_history', JSON.stringify(newHistory.slice(0, 20))); // Keep last 20 locally
+    localStorage.setItem('local_history', JSON.stringify(newHistory.slice(0, 20)));
   };
 
   const handleGenerate = async () => {
     setIsGenerating(true);
     setGeneratedHtml(''); 
+    setCurrentLiveUrl('');
     
     try {
       const html = await generateLandingPage(formData);
       setGeneratedHtml(html);
-      
-      // Auto-save the generated content to Firestore (or local fallback)
       await saveToHistoryAndDb(html, formData, false);
 
     } catch (error) {
@@ -139,6 +161,15 @@ const App: React.FC = () => {
   const handleLoadHistory = (item: HistoryItem) => {
     setFormData(item.data);
     setGeneratedHtml(item.html);
+    
+    // Reconstruct URL if we have user info
+    if (user && item.id.endsWith('.html')) {
+       const liveUrl = `${window.location.origin}/?uid=${user.uid}&page=${item.id}`;
+       setCurrentLiveUrl(liveUrl);
+    } else {
+       setCurrentLiveUrl('');
+    }
+
     showNotification('Previous version loaded.', 'success');
   };
 
@@ -152,14 +183,11 @@ const App: React.FC = () => {
       showNotification('Preparing project download...', 'success');
       
       const zip = new JSZip();
-      
-      // Create project folder structure
       const projectName = formData.pageName.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'landing-page';
       const root = zip.folder(projectName);
 
       if (!root) throw new Error("Failed to create zip folder");
 
-      // Parse HTML to separate concerns (HTML/CSS/JS)
       const parser = new DOMParser();
       const doc = parser.parseFromString(generatedHtml, 'text/html');
 
@@ -171,13 +199,11 @@ const App: React.FC = () => {
         tag.remove();
       });
 
-      // Add external link to CSS if we extracted anything or just to have the file
       const linkTag = doc.createElement('link');
       linkTag.rel = 'stylesheet';
       linkTag.href = 'css/styles.css';
       doc.head.appendChild(linkTag);
       
-      // Create css folder and file
       root.folder('css')?.file('styles.css', cssContent);
 
       // 2. Extract JS
@@ -185,50 +211,27 @@ const App: React.FC = () => {
       const scriptTags = doc.querySelectorAll('script');
       
       scriptTags.forEach((tag) => {
-        // Skip external scripts (like Tailwind CDN) and import maps
         if (!tag.src && !tag.type?.includes('importmap') && !tag.type?.includes('module')) {
           jsContent += tag.innerHTML + '\n\n';
           tag.remove();
         }
       });
 
-      // Add link to new JS file
       const scriptLink = doc.createElement('script');
       scriptLink.src = 'js/scripts.js';
       doc.body.appendChild(scriptLink);
 
-      // Create js folder and file
       root.folder('js')?.file('scripts.js', jsContent);
-
-      // 3. Create Assets folder
       root.folder('assets');
 
-      // 4. Create HTML file
-      // Prepend DOCTYPE as outerHTML doesn't include it
       const finalHtml = `<!DOCTYPE html>\n${doc.documentElement.outerHTML}`;
       root.file('index.html', finalHtml);
 
-      // 5. Create README
-      const readmeContent = `# ${formData.pageName}
-
-Generated by Landing Page AI Builder
-
-## Project Structure
-- index.html: Main entry point
-- css/styles.css: Custom styles (Tailwind is loaded via CDN)
-- js/scripts.js: Custom interactivity
-- assets/: Place your images here
-
-## Customization
-To edit the content, open index.html in any code editor.
-To change styles, you can add standard CSS to css/styles.css or add Tailwind classes in index.html.
-`;
+      const readmeContent = `# ${formData.pageName}\n\nGenerated by Landing Page AI Builder`;
       root.file('README.md', readmeContent);
 
-      // Generate ZIP
       const blob = await zip.generateAsync({ type: 'blob' });
       
-      // Trigger download
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -261,17 +264,8 @@ To change styles, you can add standard CSS to css/styles.css or add Tailwind cla
   };
 
   const handleDeploy = () => {
-    if (!generatedHtml) {
-      showNotification('Generate a page first!', 'error');
-      return;
-    }
-    const deployBtn = document.activeElement as HTMLElement;
-    if(deployBtn) deployBtn.blur();
-    
-    showNotification('Deployment started... (Mock)', 'success');
-    setTimeout(() => {
-      showNotification('🚀 Site is live at https://mock-deploy.com/' + Math.random().toString(36).substring(7), 'success');
-    }, 1500);
+    // Just a placeholder for "Deploy" if not using the Live URL feature
+    showNotification('Your page is auto-saved to the Live URL!', 'success');
   };
 
   const getNotificationStyles = (type: string) => {
@@ -284,7 +278,47 @@ To change styles, you can add standard CSS to css/styles.css or add Tailwind cla
   };
 
   // --------------------------------------------------------------------------
-  // Render Logic
+  // PUBLIC VIEWER MODE
+  // --------------------------------------------------------------------------
+  if (isPublicView) {
+    if (publicLoading) {
+      return (
+        <div className="h-screen w-screen flex flex-col items-center justify-center bg-white">
+          <Loader2 className="w-10 h-10 text-indigo-600 animate-spin mb-4" />
+          <p className="text-gray-500 font-medium">Loading Page...</p>
+        </div>
+      );
+    }
+    
+    if (!publicHtml) {
+      return (
+        <div className="h-screen w-screen flex flex-col items-center justify-center bg-gray-50 p-6 text-center">
+          <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full">
+            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <AlertCircle className="w-8 h-8 text-red-500" />
+            </div>
+            <h1 className="text-xl font-bold text-gray-900 mb-2">Page Not Found</h1>
+            <p className="text-gray-500 mb-6">The page you are looking for does not exist or has been removed.</p>
+            <a href="/" className="inline-flex items-center justify-center px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors">
+              Go to Homepage
+            </a>
+          </div>
+        </div>
+      );
+    }
+
+    // Render the raw HTML
+    return (
+      <iframe 
+        srcDoc={publicHtml} 
+        style={{ width: '100vw', height: '100vh', border: 'none' }} 
+        title="Public Page"
+      />
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // EDITOR APP MODE
   // --------------------------------------------------------------------------
 
   if (authLoading) {
@@ -295,19 +329,13 @@ To change styles, you can add standard CSS to css/styles.css or add Tailwind cla
     );
   }
 
-  // If NOT authenticated, show the Auth Page
   if (!user) {
-    return <AuthPage onSuccess={() => {
-      // The auth listener in useEffect will handle the state update automatically.
-      // If we are in offline mode, notifySubscribers inside firebase.ts would have already fired.
-    }} />;
+    return <AuthPage onSuccess={() => {}} />;
   }
 
-  // If authenticated, show the Builder App
   return (
     <div className="flex h-screen bg-white font-sans text-gray-900">
       
-      {/* Toast Notification */}
       {notification && (
         <div className={`fixed top-5 right-5 z-50 flex items-center gap-3 px-4 py-3 rounded-lg shadow-xl transform transition-all animate-in fade-in slide-in-from-top-5 duration-300 border ${getNotificationStyles(notification.type)}`}>
           {notification.type === 'success' && <CheckCircle2 className="w-5 h-5 text-green-600" />}
@@ -317,7 +345,6 @@ To change styles, you can add standard CSS to css/styles.css or add Tailwind cla
         </div>
       )}
 
-      {/* Left Sidebar - Form */}
       <Sidebar 
         formData={formData} 
         onChange={handleFormChange} 
@@ -328,11 +355,10 @@ To change styles, you can add standard CSS to css/styles.css or add Tailwind cla
         history={history}
         onLoadHistory={handleLoadHistory}
         user={user}
-        onLogin={() => {}} // User is already logged in if we are here
+        onLogin={() => {}} 
         onLogout={handleLogout}
       />
 
-      {/* Right Area - Preview */}
       <div className="flex-1 flex flex-col min-w-0 bg-gray-50">
         <PreviewToolbar 
           device={device} 
@@ -340,6 +366,7 @@ To change styles, you can add standard CSS to css/styles.css or add Tailwind cla
           onSave={handleSave}
           onDeploy={handleDeploy}
           onPreview={handlePreview}
+          publicUrl={currentLiveUrl}
         />
         <PreviewWindow 
           html={generatedHtml} 

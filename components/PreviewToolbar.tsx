@@ -1,5 +1,5 @@
 import React from 'react';
-import { Monitor, Tablet, Smartphone, Download, Eye, Rocket } from 'lucide-react';
+import { Monitor, Tablet, Smartphone, Download, Eye, Rocket, Globe } from 'lucide-react';
 import { Button } from './ui/Button';
 import { DeviceType } from '../types';
 
@@ -9,9 +9,17 @@ interface PreviewToolbarProps {
   onSave: () => void;
   onDeploy: () => void;
   onPreview: () => void;
+  publicUrl?: string; // Optional URL for the live button
 }
 
-export const PreviewToolbar: React.FC<PreviewToolbarProps> = ({ device, setDevice, onSave, onDeploy, onPreview }) => {
+export const PreviewToolbar: React.FC<PreviewToolbarProps> = ({ device, setDevice, onSave, onDeploy, onPreview, publicUrl }) => {
+  
+  const handleLiveUrlClick = () => {
+    if (publicUrl) {
+      window.open(publicUrl, '_blank');
+    }
+  };
+
   return (
     <div className="h-16 border-b border-gray-200 bg-white flex items-center justify-between px-6 shadow-[0_1px_3px_rgba(0,0,0,0.05)] z-10 relative">
       <div className="flex items-center gap-4">
@@ -42,16 +50,24 @@ export const PreviewToolbar: React.FC<PreviewToolbarProps> = ({ device, setDevic
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2">
+        {publicUrl && (
+          <Button 
+            variant="ghost" 
+            className="text-green-600 hover:text-green-700 hover:bg-green-50 border-green-200"
+            onClick={handleLiveUrlClick} 
+            icon={<Globe className="w-4 h-4"/>}
+          >
+             Live URL
+          </Button>
+        )}
         <Button variant="ghost" onClick={onPreview} icon={<Eye className="w-4 h-4"/>}>
            Preview
         </Button>
         <Button variant="secondary" onClick={onSave} icon={<Download className="w-4 h-4"/>}>
            Download Code
         </Button>
-        <Button variant="primary" onClick={onDeploy} icon={<Rocket className="w-4 h-4"/>}>
-           Deploy
-        </Button>
+        {/* Deprecated 'Deploy' button in favor of auto-save + Live URL, but keeping for UI consistency if needed */}
       </div>
     </div>
   );

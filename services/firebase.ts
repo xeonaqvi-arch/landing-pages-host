@@ -204,16 +204,16 @@ export const saveProjectToFirestore = async (data: LandingPageData, html: string
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)+/g, '') || 'landing-page';
     
-    // Append random string to ensure uniqueness
-    const pageId = `${slug}-${Math.random().toString(36).substring(2, 7)}`;
+    // Create a "file-like" document ID as requested: e.g., my-page-timestamp.html
+    const fileId = `${slug}-${Date.now()}.html`;
 
     // Prepare payload matching user requirements exactly
-    // Collection: "landing_pages"
+    // Collection: "users/{uid}/landing_pages"
     const payload = {
       created_at: serverTimestamp(), // Timestamp
       html_content: html,            // String
       "live-url": "",                // String
-      page_id: pageId,               // String
+      page_id: fileId,               // String (using fileId as page_id for consistency)
       status: "pending",             // String
       
       // Additional internal metadata
@@ -221,10 +221,12 @@ export const saveProjectToFirestore = async (data: LandingPageData, html: string
       data: data
     };
 
-    const docRef = await addDoc(collection(db, "landing_pages"), payload);
+    // Save to subcollection under the user: users/UID/landing_pages/FILE_ID
+    const docRef = doc(db, "users", user.uid, "landing_pages", fileId);
+    await setDoc(docRef, payload);
 
     return {
-      id: docRef.id,
+      id: fileId,
       timestamp: Date.now(),
       data,
       html
@@ -248,22 +250,21 @@ export const fetchProjectsFromFirestore = async (): Promise<HistoryItem[]> => {
   }
 
   try {
-    const q = query(
-      collection(db, "landing_pages"), 
-      where("userId", "==", user.uid)
-    );
+    // Query subcollection: users/{uid}/landing_pages
+    const pagesRef = collection(db, "users", user.uid, "landing_pages");
+    const q = query(pagesRef);
     
     const querySnapshot = await getDocs(q);
     
     const items = querySnapshot.docs.map(doc => {
       const d = doc.data();
       
-      // Handle timestamp mapping (support new 'created_at' and old 'createdAt')
+      // Handle timestamp mapping
       const timestamp = d.created_at?.toMillis 
         ? d.created_at.toMillis() 
         : (d.createdAt?.toMillis ? d.createdAt.toMillis() : Date.now());
       
-      // Handle html content mapping (support new 'html_content' and old 'html')
+      // Handle html content mapping
       const html = d.html_content || d.html || "";
 
       return {
@@ -271,10 +272,11 @@ export const fetchProjectsFromFirestore = async (): Promise<HistoryItem[]> => {
         timestamp: timestamp,
         data: d.data as LandingPageData,
         html: html,
-        userId: d.userId
+        userId: user.uid // we know it belongs to this user
       };
     });
 
+    // Client-side sort by newest first
     return items.sort((a, b) => b.timestamp - a.timestamp);
 
   } catch (error: any) {

@@ -27,11 +27,22 @@ const App: React.FC = () => {
   const [authLoading, setAuthLoading] = useState(true);
   const [currentLiveUrl, setCurrentLiveUrl] = useState<string>('');
 
-  // Check for Public Viewer Route (query params)
+  // Check for Public Viewer Route
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const uid = params.get('uid');
-    const pageId = params.get('page');
+    // Attempt to parse path-based routing: /userId/pageId
+    const pathSegments = window.location.pathname.split('/').filter(Boolean);
+    let uid: string | null = null;
+    let pageId: string | null = null;
+
+    if (pathSegments.length >= 2) {
+      uid = pathSegments[0];
+      pageId = pathSegments[1];
+    } else {
+      // Fallback for query params if needed
+      const params = new URLSearchParams(window.location.search);
+      uid = params.get('uid');
+      pageId = params.get('page');
+    }
 
     if (uid && pageId) {
       setIsPublicView(true);
@@ -103,8 +114,8 @@ const App: React.FC = () => {
     try {
       savedItem = await saveProjectToFirestore(data, html);
       
-      // Construct Live URL locally with the correct domain
-      const liveUrl = `https://landing-pages-host.vercel.app/?uid=${savedItem.userId}&page=${savedItem.id}`;
+      // Construct Live URL locally with the correct domain and path format
+      const liveUrl = `https://landing-pages-host.vercel.app/${savedItem.userId}/${savedItem.id}`;
       setCurrentLiveUrl(liveUrl);
 
       const msg = isManual ? 'Page saved to Database!' : 'Page generated & saved!';
@@ -164,7 +175,7 @@ const App: React.FC = () => {
     
     // Reconstruct URL if we have user info
     if (user && item.id.endsWith('.html')) {
-       const liveUrl = `https://landing-pages-host.vercel.app/?uid=${user.uid}&page=${item.id}`;
+       const liveUrl = `https://landing-pages-host.vercel.app/${user.uid}/${item.id}`;
        setCurrentLiveUrl(liveUrl);
     } else {
        setCurrentLiveUrl('');

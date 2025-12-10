@@ -16,6 +16,7 @@ export interface HistoryItem {
   data: LandingPageData;
   html: string;
   userId?: string;
+  liveUrl?: string;
 }
 
 export interface GeneratedContent {

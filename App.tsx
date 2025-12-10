@@ -29,12 +29,11 @@ const App: React.FC = () => {
 
   // Check for Public Viewer Route
   useEffect(() => {
-    const pathSegments = window.location.pathname.split('/').filter(Boolean);
+    // Handle path-based routing: /userId/pageId.html
+    const pathSegments = window.location.pathname.split('/').filter(Boolean).map(decodeURIComponent);
     let uid: string | null = null;
     let pageId: string | null = null;
 
-    // Handle path-based routing: /userId/pageId.html
-    // We only accept it if the last segment looks like an HTML file we generated.
     if (pathSegments.length >= 2) {
       uid = pathSegments[0];
       pageId = pathSegments[1];
@@ -54,6 +53,9 @@ const App: React.FC = () => {
     if (uid && pageId && pageId.endsWith('.html')) {
       setIsPublicView(true);
       setPublicLoading(true);
+      
+      console.log(`Loading public page: ${uid} / ${pageId}`);
+      
       fetchPublicPage(uid, pageId).then((html) => {
         setPublicHtml(html);
         setPublicLoading(false);
@@ -121,9 +123,10 @@ const App: React.FC = () => {
     try {
       savedItem = await saveProjectToFirestore(data, html);
       
-      // Construct Live URL locally with the correct domain and path format
-      const liveUrl = `https://landing-pages-host.vercel.app/${savedItem.userId}/${savedItem.id}`;
-      setCurrentLiveUrl(liveUrl);
+      // Use the URL returned from the save function
+      if (savedItem.liveUrl) {
+        setCurrentLiveUrl(savedItem.liveUrl);
+      }
 
       const msg = isManual ? 'Page saved to Database!' : 'Page generated & saved!';
       showNotification(msg, 'success');
@@ -180,12 +183,15 @@ const App: React.FC = () => {
     setFormData(item.data);
     setGeneratedHtml(item.html);
     
-    // Reconstruct URL if we have user info
-    if (user && item.id.endsWith('.html')) {
-       const liveUrl = `https://landing-pages-host.vercel.app/${user.uid}/${item.id}`;
-       setCurrentLiveUrl(liveUrl);
+    // Use the liveUrl from the item if available, otherwise reconstruct it or clear it
+    if (item.liveUrl) {
+      setCurrentLiveUrl(item.liveUrl);
+    } else if (user && item.id.endsWith('.html')) {
+      // Fallback reconstruction for older items
+      const liveUrl = `https://landing-pages-host.vercel.app/${user.uid}/${item.id}`;
+      setCurrentLiveUrl(liveUrl);
     } else {
-       setCurrentLiveUrl('');
+      setCurrentLiveUrl('');
     }
 
     showNotification('Previous version loaded.', 'success');
@@ -316,8 +322,18 @@ const App: React.FC = () => {
               <AlertCircle className="w-8 h-8 text-red-500" />
             </div>
             <h1 className="text-xl font-bold text-gray-900 mb-2">Page Not Found</h1>
-            <p className="text-gray-500 mb-6">The page you are looking for does not exist or has been removed.</p>
-            <a href="/" className="inline-flex items-center justify-center px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors">
+            <p className="text-gray-500 mb-6">
+              The page you are looking for does not exist or you do not have permission to view it.
+            </p>
+            <div className="text-xs text-gray-400 border-t pt-4 border-gray-100 text-left">
+               <p className="font-semibold mb-1">Troubleshooting:</p>
+               <ul className="list-disc pl-4 space-y-1">
+                 <li>Ensure <strong>Firestore Rules</strong> allow public read access.</li>
+                 <li>If you are the developer, verify you have <strong>re-deployed</strong> the latest code to Vercel.</li>
+                 <li>Check that the URL is correct.</li>
+               </ul>
+            </div>
+            <a href="/" className="mt-6 inline-flex items-center justify-center px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors w-full">
               Go to Homepage
             </a>
           </div>

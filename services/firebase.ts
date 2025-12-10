@@ -230,7 +230,8 @@ export const saveProjectToFirestore = async (data: LandingPageData, html: string
       timestamp: Date.now(),
       data,
       html,
-      userId: user.uid
+      userId: user.uid,
+      liveUrl: liveUrl
     };
   } catch (error: any) {
     if (error.code === 'permission-denied') {
@@ -264,7 +265,8 @@ export const fetchProjectsFromFirestore = async (): Promise<HistoryItem[]> => {
         timestamp: timestamp,
         data: d.data as LandingPageData,
         html: html,
-        userId: user.uid
+        userId: user.uid,
+        liveUrl: d['live-url'] || ''
       };
     });
 
@@ -289,7 +291,7 @@ export const fetchPublicPage = async (uid: string, pageId: string): Promise<stri
       const data = docSnap.data();
       return data.html_content || data.html || null;
     } else {
-      console.log("No such document!");
+      console.log("No such document found in public path:", uid, pageId);
       return null;
     }
   } catch (error) {

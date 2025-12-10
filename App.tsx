@@ -29,22 +29,29 @@ const App: React.FC = () => {
 
   // Check for Public Viewer Route
   useEffect(() => {
-    // Attempt to parse path-based routing: /userId/pageId
     const pathSegments = window.location.pathname.split('/').filter(Boolean);
     let uid: string | null = null;
     let pageId: string | null = null;
 
+    // Handle path-based routing: /userId/pageId.html
+    // We only accept it if the last segment looks like an HTML file we generated.
     if (pathSegments.length >= 2) {
       uid = pathSegments[0];
       pageId = pathSegments[1];
-    } else {
-      // Fallback for query params if needed
+    } 
+    
+    // Handle query params fallback (if used)
+    if (!uid || !pageId) {
       const params = new URLSearchParams(window.location.search);
-      uid = params.get('uid');
-      pageId = params.get('page');
+      const qUid = params.get('uid');
+      const qPage = params.get('page');
+      if (qUid) uid = qUid;
+      if (qPage) pageId = qPage;
     }
 
-    if (uid && pageId) {
+    // STRICT CHECK: Only enter public view if pageId looks like our generated files (.html)
+    // This prevents false positives during development or if the app is hosted on a subpath
+    if (uid && pageId && pageId.endsWith('.html')) {
       setIsPublicView(true);
       setPublicLoading(true);
       fetchPublicPage(uid, pageId).then((html) => {

@@ -1,10 +1,12 @@
 import { GoogleGenAI } from "@google/genai";
 import { LandingPageData } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Fixed: Use process.env.API_KEY exclusively for API key
+const ai = new GoogleGenAI({ apiKey: "AIzaSyCabFSsGVFIPgOL02_ZVf5p_Yhd0cXzvYQ" });
 
 export const generateLandingPage = async (data: LandingPageData): Promise<string> => {
-  const modelId = "gemini-2.5-flash"; // Efficient for code generation
+  // Fixed: Use gemini-3-pro-preview for complex coding tasks
+  const modelId = "gemini-3-pro-preview"; 
 
   const prompt = `
     You are an expert frontend React and Tailwind CSS developer.
